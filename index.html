@@ -1,0 +1,92 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>NOCTURNE // GLITCH LAB v3</title>
+<style>*{box-sizing:border-box}body{margin:0;background:#090711;color:#eee6ff;font:14px system-ui}main{max-width:1200px;margin:auto;padding:22px}h1{letter-spacing:.14em;color:#c89aff}h3{color:#b88cf7;margin-top:22px}.layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px}@media(max-width:800px){.layout{grid-template-columns:1fr}}.panel{background:#171124;border:1px solid #51366f;border-radius:14px;padding:18px}canvas{width:100%;background:black;max-height:70vh;object-fit:contain;border-radius:9px}video{display:none}label{display:block;margin:13px 0 5px}input[type=range],input[type=file],select{width:100%}input[type=range]{accent-color:#b46aff}select,input[type=color]{background:#241b38;color:#eee;border:1px solid #694c88;border-radius:7px;padding:8px}button{background:#713bbb;color:white;border:0;border-radius:8px;padding:11px 14px;margin:8px 5px 0 0;cursor:pointer}.muted{color:#aaa0be;font-size:12px}#status{min-height:20px}.setting{display:flex;justify-content:space-between;gap:8px}input[type=file]{padding:12px;border:1px dashed #a06ce3;border-radius:8px}</style></head>
+<body><main><h1>NOCTURNE // GLITCH LAB <small>v3</small></h1><p class="muted">Цветовые фильтры · вертикальные и горизонтальные полосы · движущийся код фильтров</p>
+<div class="layout"><section class="panel"><canvas id="screen" width="640" height="360"></canvas><video id="source" playsinline loop muted></video><label>Выберите видео, GIF или изображение</label><input id="file" type="file" accept="video/*,image/*,.mov,.gif"><div><button id="play">Пауза / пуск</button><button id="png">Сохранить PNG</button><button id="save">Записать WebM</button></div><p id="status" class="muted">Ожидание файла</p><p class="muted">Файлы остаются в вашем браузере. Для анимированного GIF рекомендуется Chrome/Edge с ImageDecoder; в других браузерах GIF может отображаться как статичное изображение. WebM записывается без звука.</p></section>
+<aside class="panel"><h3>COLOR / ФИЛЬТР</h3><label>Цветовая схема</label><select id="palette"><option value="cyan">Ледяной синий</option><option value="purple">Фиолетовый</option><option value="red">Красный</option><option value="green">Зелёный</option><option value="amber">Янтарный</option><option value="custom">Свой цвет</option><option value="original">Исходные цвета</option></select><label>Свой цвет</label><input type="color" id="custom" value="#9c43ff"><div id="sliders"></div>
+<h3>GLITCH / ПОЛОСЫ</h3><label>Направление полос</label><select id="direction"><option value="both">Оба направления</option><option value="horizontal">Горизонтальные</option><option value="vertical">Вертикальные</option><option value="none">Выключены</option></select>
+<h3>SOURCE RAIN / КОД ФИЛЬТРОВ</h3><label><input id="binary" type="checkbox" checked> Показывать код фильтров</label><label>Направление падения</label><select id="rainDir"><option value="vertical">Вертикально ↓</option><option value="horizontal">Горизонтально →</option></select><label>Цвет кода</label><input type="color" id="codeColor" value="#bd8bff"><div id="binarySliders"></div><label><input id="compare" type="checkbox"> Оригинал без эффектов</label></aside></div></main>
+<script>
+const $=id=>document.getElementById(id),canvas=$('screen'),ctx=canvas.getContext('2d',{willReadFrequently:true}),video=$('source'),tmp=document.createElement('canvas'),tc=tmp.getContext('2d',{willReadFrequently:true});let img=null,kind='',running=true,recording=false,recorder=null,url=null,gifFrames=[],gifAt=0,gifClock=0, last=performance.now();const clamp=(x,a,b)=>Math.max(a,Math.min(b,x));
+const sliders=[['contrast','Контраст',0.3,3,1.55,.05],['strength','Сила цвета',0,3,1.9,.05],['levels','Постеризация',2,64,18,1],['glitch','Сила полос',0,1,0.55,.01],['density','Частота полос',0,30,8,1],['shift','RGB-сдвиг',0,25,7,1],['noise','Шум',0,35,5,1]];
+const bsliders=[['codeDensity','Плотность строк кода',0,100,40,1],['codeSize','Размер кода',8,32,15,1],['codeSpeed','Скорость движения',0,240,65,1],['codeOpacity','Прозрачность кода',0,100,75,1],['codeGlitch','Степень glitch кода',0,100,35,1]];
+function addSlider(parent,[id,title,min,max,value,step]){const label=document.createElement('label');label.className='setting';label.innerHTML='<span>'+title+'</span><output id="'+id+'V"></output>';const input=document.createElement('input');input.type='range';Object.assign(input,{id,min,max,value,step});input.oninput=()=>$(id+'V').textContent=input.value;$(parent).append(label,input);input.oninput()}
+sliders.forEach(x=>addSlider('sliders',x));bsliders.forEach(x=>addSlider('binarySliders',x));
+const num=id=>Number($(id).value),status=t=>$('status').textContent=t;
+function size(w,h){let s=Math.min(1,900/w,650/h);canvas.width=tmp.width=Math.max(2,Math.round(w*s));canvas.height=tmp.height=Math.max(2,Math.round(h*s))}
+$('file').onchange=async e=>{const f=e.target.files?.[0];if(!f)return;status('Загрузка '+f.name+'…');img=null;kind='';gifFrames=[];video.pause();video.removeAttribute('src');video.load();if(url)URL.revokeObjectURL(url);url=URL.createObjectURL(f);const ext=f.name.split('.').pop().toLowerCase();if(f.type.startsWith('video/')||['mp4','mov','webm','m4v'].includes(ext)){kind='video';video.onloadedmetadata=()=>{size(video.videoWidth,video.videoHeight);status('Видео загружено');if(running)video.play().catch(()=>status('Видео загружено. Нажмите «Пауза / пуск».'))};video.onerror=()=>status('Ошибка декодирования видео: попробуйте MP4 H.264');video.src=url;video.load();return}
+if(ext==='gif'&&window.ImageDecoder){try{const decoder=new ImageDecoder({data:await f.arrayBuffer(),type:'image/gif'});await decoder.tracks.ready;const count=decoder.tracks.selectedTrack.frameCount;if(count>0&&count<=500){for(let i=0;i<count;i++){const result=await decoder.decode({frameIndex:i});const bitmap=await createImageBitmap(result.image);gifFrames.push({bitmap,duration:clamp((result.image.duration||100000)/1000,20,1000)});result.image.close()}kind='gif';gifAt=0;gifClock=performance.now();size(gifFrames[0].bitmap.width,gifFrames[0].bitmap.height);status('Анимированный GIF: '+count+' кадров');return}}catch(err){console.warn(err);gifFrames=[]}}
+kind='image';img=new Image();img.onload=()=>{size(img.naturalWidth,img.naturalHeight);status(ext==='gif'?'GIF загружен как статичный кадр: браузер не поддерживает ImageDecoder':'Изображение загружено')};img.onerror=()=>status('Ошибка загрузки изображения');img.src=url};
+$('play').onclick=()=>{running=!running;if(kind==='video'){if(running)video.play().catch(()=>{});else video.pause()}};
+$('png').onclick=()=>{const a=document.createElement('a');a.href=canvas.toDataURL('image/png');a.download='nocturne-frame.png';a.click()};
+$('save').onclick=()=>{if(recording){recorder.stop();return}if(!canvas.captureStream||!window.MediaRecorder){status('MediaRecorder не поддерживается');return}let opts={};for(const mimeType of ['video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'])if(MediaRecorder.isTypeSupported(mimeType)){opts={mimeType};break}try{recorder=new MediaRecorder(canvas.captureStream(30),opts)}catch(e){status('Запись WebM не поддерживается этим браузером');return}const chunks=[];recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};recorder.onstop=()=>{const blob=new Blob(chunks,{type:recorder.mimeType||'video/webm'}),u=URL.createObjectURL(blob),a=document.createElement('a');a.href=u;a.download='nocturne-glitch.webm';a.click();setTimeout(()=>URL.revokeObjectURL(u),30000);recording=false;$('save').textContent='Записать WebM';status('Видео сохранено')};recorder.start();recording=true;running=true;if(kind==='video')video.play().catch(()=>{});$('save').textContent='Остановить запись';status('Идёт запись…')};
+function rgb(hex){return [1,3,5].map(i=>parseInt(hex.slice(i,i+2),16))}
+const codeLines=[
+ 'const frame = ctx.getImageData(0,0,w,h);',
+ 'const contrast = 1.55;',
+ 'const posterize = (v,n) => Math.round(v/n)*n;',
+ 'const shift = (x,y) => sample(x+offset,y);',
+ 'const cyan = [18,185,255];',
+ 'const purple = [163,75,255];',
+ 'let noise = Math.random() * intensity;',
+ 'for (let y=0; y<height; y++) {',
+ '  for (let x=0; x<width; x++) {',
+ '    pixel.r = clamp(pixel.r * redGain);',
+ '    pixel.g = clamp(pixel.g * greenGain);',
+ '    pixel.b = clamp(pixel.b * blueGain);',
+ '    applyChromaticAberration(x,y);',
+ '    drawGlitchStripe(x,y,displacement);',
+ '  }',
+ '}',
+ 'requestAnimationFrame(render);',
+ 'const horizontal = glitchDirection === "x";',
+ 'const vertical = glitchDirection === "y";',
+ 'const color = palette[currentPalette];',
+ 'const grain = randomNoise(frame);',
+ 'ctx.putImageData(output,0,0);',
+ 'const levels = Math.max(2, posterizeLevels);',
+ 'const offset = Math.sin(time*0.02)*strength;',
+ 'function renderFilter(source) {',
+ '  return processPixels(source, settings);',
+ '}'
+];
+function paintCode(w,h,now){
+ if(!$('binary').checked)return;
+ const font=num('codeSize'),density=num('codeDensity')/100;
+ const speed=num('codeSpeed'),opacity=num('codeOpacity')/100;
+ const glitch=num('codeGlitch')/100;
+ const horizontal=$('rainDir').value==='horizontal';
+ const laneStep=font*1.65,lanes=Math.ceil((horizontal?h:w)/laneStep);
+ const color=rgb($('codeColor').value);
+ ctx.save();
+ ctx.font=font+'px monospace';ctx.textBaseline='top';
+ for(let lane=0;lane<lanes;lane++){
+   const hash=(Math.sin(lane*12.9898)*43758.5453%1+1)%1;
+   if(hash>density)continue;
+   const extent=horizontal?w:h;
+   const blockSize=font*20;
+   const position=((now/1000*speed+lane*79)%(extent+blockSize))-blockSize;
+   for(let j=0;j<14;j++){
+     const text=codeLines[(lane*7+j)%codeLines.length];
+     const rand=Math.sin(lane*17.31+j*47.11+Math.floor(now/130));
+     if(rand>1-glitch*.6)continue;
+     let x=horizontal?position+j*font*1.5:lane*laneStep;
+     let y=horizontal?lane*laneStep:position+j*font*1.5;
+     if(glitch>0.01 && Math.abs(rand)>.75){
+       x+=Math.sin(now/65+j)*glitch*font*4;
+       y+=Math.cos(now/90+lane)*glitch*font*2;
+     }
+     ctx.fillStyle=`rgba(${color.join(',')},${opacity*(.4+.6*j/14)})`;
+     ctx.fillText(text,x,y);
+     if(glitch>.4 && rand<-.85){
+       ctx.fillStyle=`rgba(255,65,180,${glitch*.6})`;
+       ctx.fillText(text,x+font*.6,y-font*.2);
+     }
+   }
+ }
+ ctx.restore();
+}
+function draw(now){requestAnimationFrame(draw);const src=kind==='video'&&video.readyState>=2?video:kind==='image'&&img?.complete?img:kind==='gif'&&gifFrames.length?gifFrames[gifAt].bitmap:null;if(!src)return;if(!running&&!recording)return;const w=canvas.width,h=canvas.height;if(kind==='gif'&&now-gifClock>=gifFrames[gifAt].duration){gifClock=now;gifAt=(gifAt+1)%gifFrames.length}tc.drawImage(kind==='gif'?gifFrames[gifAt].bitmap:src,0,0,w,h);if($('compare').checked){ctx.drawImage(tmp,0,0);return}const input=tc.getImageData(0,0,w,h).data,output=ctx.createImageData(w,h),o=output.data;const strength=num('strength'),contrast=num('contrast'),step=255/(num('levels')-1),shift=num('shift'),noise=num('noise'),g=num('glitch'),direction=$('direction').value,bandCount=num('density');let color=({cyan:'#12b9ff',purple:'#a34bff',red:'#ff315c',green:'#39ff8e',amber:'#ffae35',custom:$('custom').value})[$('palette').value],tint=color?rgb(color):null;const hb=[],vb=[];for(let i=0;i<bandCount*g;i++){if(direction==='both'||direction==='horizontal')hb.push([Math.random()*h|0,1+Math.random()*h*.035|0,(Math.random()-.5)*w*.12*g|0]);if(direction==='both'||direction==='vertical')vb.push([Math.random()*w|0,1+Math.random()*w*.035|0,(Math.random()-.5)*h*.12*g|0])}
+for(let y=0;y<h;y++)for(let x=0;x<w;x++){let dx=0,dy=0;for(const b of hb)if(y>=b[0]&&y<b[0]+b[1])dx=b[2];for(const b of vb)if(x>=b[0]&&x<b[0]+b[1])dy=b[2];const at=(xx,yy,c)=>input[(clamp(yy,0,h-1)*w+clamp(xx,0,w-1))*4+c];const p=(y*w+x)*4;let v=[at(x-dx+shift,y-dy,0),at(x-dx,y-dy,1),at(x-dx-shift,y-dy,2)];for(let c=0;c<3;c++){let z=v[c];if(tint)z=z*(.35+strength*tint[c]/255);z=clamp((z-110)*contrast+110-18,0,255);z=Math.round(z/step)*step+(Math.random()-.5)*noise*2;if(y%2)z*=.9;o[p+c]=clamp(z,0,255)}o[p+3]=255}
+ctx.putImageData(output,0,0);paintCode(w,h,now)}
+requestAnimationFrame(draw);
+</script></body></html>
